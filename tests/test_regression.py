@@ -611,3 +611,71 @@ class TestBug:
         from jinja2.runtime import ChainableUndefined
 
         assert str(Markup(ChainableUndefined())) == ""
+
+    def test_scoped_block_loop_variables(self, env):
+        tmpl = env.from_string(
+            """\
+Start
+{% for i in ["a", "list", "of", "items"] -%}
+{% block body scoped -%}
+Foo {{ i }}{% if loop.last %} Bar{% endif -%}
+{%- endblock %}
+{% endfor -%}
+End"""
+        )
+        assert tmpl.render() == "Start\nFoo a\nFoo list\nFoo of\nFoo items Bar\nEnd"
+        tmpl = env.from_string(
+            """\
+Start
+{% for i in ["a", "list", "of", "items"] -%}
+{% block body scoped -%}
+{{ loop.index }} {{ i }}
+{%- endblock %}
+{% endfor -%}
+End"""
+        )
+        assert tmpl.render() == "Start\n1 a\n2 list\n3 of\n4 items\nEnd"
+
+    def test_contextfunction_loop_vars(self, env):
+        from jinja2.utils import contextfunction
+
+        @contextfunction
+        def test(ctx):
+            return f"{ctx['i']}{ctx['j']}"
+
+        tmpl = env.from_string(
+            """\
+{% set i = 42 %}
+{%- for idx in range(2) -%}
+{{ i }}{{ j }}
+{% set i = idx -%}
+{%- set j = loop.index -%}
+{{ test() }}
+{{ i }}{{ j }}
+{% endfor -%}
+{{ i }}{{ j }}"""
+        )
+        tmpl.globals["test"] = test
+        assert tmpl.render() == "42\n01\n01\n42\n12\n12\n42"
+
+    def test_contextfunction_scoped_loop_vars(self, env):
+        from jinja2.utils import contextfunction
+
+        @contextfunction
+        def test(ctx):
+            return f"{ctx['i']}"
+
+        tmpl = env.from_string(
+            """\
+{% set i = 42 %}
+{%- for val in ['foo','bar'] -%}
+{{ i }}
+{%- set i = loop.index0 -%}
+{% block body scoped %}
+{{ test() }}
+{% endblock -%}
+{% endfor -%}
+{{ i }}"""
+        )
+        tmpl.globals["test"] = test
+        assert tmpl.render() == "42\n0\n42\n1\n42"
