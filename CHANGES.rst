@@ -14,6 +14,10 @@ Unreleased
 -   Fix a bug that caused imported macros to not have access to the
     current template's globals. :issue:`688`
 -   Add ability to ignore ``trim_blocks`` using ``+%}``. :issue:`1036`
+-   Fix a bug that prevented variables set in blocks or loops from
+    being accessed in custom context functions. :issue:`768`
+-   Fix a bug that caused scoped blocks from accessing special loop
+    variables. :issue:`1088`
 
 Version 2.11.2
 --------------
