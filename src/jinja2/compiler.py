@@ -130,9 +130,10 @@ class Frame:
         if parent is not None:
             self.buffer = parent.buffer
 
-        # variables set inside of loops will not affect outer frames, but they
-        # still needs to be kept track of as part of the active context.
+        # variables set inside of loops and blocks will not affect outer frames,
+        # but they still needs to be kept track of as part of the active context.
         self.loop_frame = False
+        self.block_frame = False
 
     def copy(self):
         """Create a copy of the current one."""
@@ -642,7 +643,12 @@ class CodeGenerator(NodeVisitor):
         context variables if necessary.
         """
         vars = self._assign_stack.pop()
-        if not frame.loop_frame and not frame.toplevel or not vars:
+        if (
+            not frame.block_frame
+            and not frame.loop_frame
+            and not frame.toplevel
+            or not vars
+        ):
             return
         public_names = [x for x in vars if x[:1] != "_"]
         if len(vars) == 1:
@@ -651,10 +657,15 @@ class CodeGenerator(NodeVisitor):
             if frame.loop_frame:
                 self.writeline(f"_loop_vars[{name!r}] = {ref}")
                 return
+            if frame.block_frame:
+                self.writeline(f"_block_vars[{name!r}] = {ref}")
+                return
             self.writeline(f"context.vars[{name!r}] = {ref}")
         else:
             if frame.loop_frame:
                 self.writeline("_loop_vars.update({")
+            elif frame.block_frame:
+                self.writeline("_block_vars.update({")
             else:
                 self.writeline("context.vars.update({")
             for idx, name in enumerate(vars):
@@ -663,7 +674,7 @@ class CodeGenerator(NodeVisitor):
                 ref = frame.symbols.ref(name)
                 self.write(f"{name!r}: {ref}")
             self.write("})")
-        if not frame.loop_frame and public_names:
+        if not frame.block_frame and not frame.loop_frame and public_names:
             if len(public_names) == 1:
                 self.writeline(f"context.exported_vars.add({public_names[0]!r})")
             else:
@@ -769,6 +780,7 @@ class CodeGenerator(NodeVisitor):
             # toplevel template.  This would cause a variety of
             # interesting issues with identifier tracking.
             block_frame = Frame(eval_ctx)
+            block_frame.block_frame = True
             undeclared = find_undeclared(block.body, ("self", "super"))
             if "self" in undeclared:
                 ref = block_frame.symbols.declare_parameter("self")
@@ -778,6 +790,7 @@ class CodeGenerator(NodeVisitor):
                 self.writeline(f"{ref} = context.super({name!r}, block_{name})")
             block_frame.symbols.analyze_node(block)
             block_frame.block = name
+            self.writeline("_block_vars = {}")
             self.enter_frame(block_frame)
             self.pull_dependencies(block.body)
             self.blockvisit(block.body, block_frame)
@@ -1413,7 +1426,9 @@ class CodeGenerator(NodeVisitor):
     # -- Expression Visitors
 
     def visit_Name(self, node, frame):
-        if node.ctx == "store" and (frame.toplevel or frame.loop_frame):
+        if node.ctx == "store" and (
+            frame.toplevel or frame.loop_frame or frame.block_frame
+        ):
             if self._assign_stack:
                 self._assign_stack[-1].add(node.name)
         ref = frame.symbols.ref(node.name)
@@ -1681,11 +1696,12 @@ class CodeGenerator(NodeVisitor):
             self.write("context.call(")
         self.visit(node.node, frame)
         extra_kwargs = {"caller": "caller"} if forward_caller else None
-        if frame.loop_frame:
-            if extra_kwargs:
-                extra_kwargs.update({"_loop_vars": "_loop_vars"})
-            else:
-                extra_kwargs = {"_loop_vars": "_loop_vars"}
+        loop_kwargs = {"_loop_vars": "_loop_vars"} if frame.loop_frame else {}
+        block_kwargs = {"_block_vars": "_block_vars"} if frame.block_frame else {}
+        if extra_kwargs:
+            extra_kwargs.update(loop_kwargs, **block_kwargs)
+        elif loop_kwargs or block_kwargs:
+            extra_kwargs = dict(loop_kwargs, **block_kwargs)
         self.signature(node, frame, extra_kwargs)
         self.write(")")
         if self.environment.is_async:
