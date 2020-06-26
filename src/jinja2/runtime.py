@@ -152,6 +152,8 @@ def resolve_or_missing(context, key, missing=missing):
         return context.vars[key]
     if key in context.parent:
         return context.parent[key]
+    if key in context.environment.filters:
+        return context.environment.filters[key]
     return missing
 
 

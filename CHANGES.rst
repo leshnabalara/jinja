@@ -14,6 +14,9 @@ Unreleased
 -   Fix a bug that caused imported macros to not have access to the
     current template's globals. :issue:`688`
 -   Add ability to ignore ``trim_blocks`` using ``+%}``. :issue:`1036`
+-   Allow filters to also be tested against an expression, and update
+    undefined filters inside if-statements to raise an error only if
+    executed during runtime. :issue:`842`
 
 Version 2.11.2
 --------------

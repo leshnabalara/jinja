@@ -165,14 +165,18 @@ class Node(metaclass=NodeType):
         for result in self.find_all(node_type):
             return result
 
-    def find_all(self, node_type):
+    def find_all(self, node_type, exclude=None):
         """Find all the nodes of a given type.  If the type is a tuple,
         the check is performed for any of the tuple items.
+
+        .. versionchanged:: 3.0.0
+            the `exclude` parameter was added.
         """
         for child in self.iter_child_nodes():
             if isinstance(child, node_type):
                 yield child
-            yield from child.find_all(node_type)
+            if exclude is None or not isinstance(child, exclude):
+                yield from child.find_all(node_type, exclude=exclude)
 
     def set_ctx(self, ctx):
         """Reset the context of a node and all child nodes.  Per default the

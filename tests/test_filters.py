@@ -6,7 +6,9 @@ import pytest
 from jinja2 import Environment
 from jinja2 import Markup
 from jinja2 import StrictUndefined
+from jinja2 import TemplateRuntimeError
 from jinja2 import UndefinedError
+from jinja2.exceptions import TemplateAssertionError
 
 
 class Magic:
@@ -743,3 +745,62 @@ class TestFilter:
         t = env.from_string("{{ s|wordwrap(20) }}")
         result = t.render(s="Hello!\nThis is Jinja saying something.")
         assert result == "Hello!\nThis is Jinja saying\nsomething."
+
+    def test_undefined_filter_inside_if(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+        t = env.from_string(
+            "{%- if var is defined -%}{{ var|f }}{%- else -%}foo{% endif %}"
+        )
+        assert t.render() == "foo"
+
+        with pytest.raises(TemplateRuntimeError, match="no filter named 'f'"):
+            t.render(var="foo")
+
+    def test_undefined_filter_inside_elif(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+        t = env.from_string(
+            "{%- if false -%}foo{%- elif var is defined -%}"
+            "{{ var|f }}{%- else -%}bar{%- endif -%}"
+        )
+        assert t.render() == "bar"
+        with pytest.raises(TemplateRuntimeError, match="no filter named 'f'"):
+            t.render(var="foo")
+
+    def test_undefined_filter_inside_else(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+        t = env.from_string(
+            "{%- if var is not defined -%}foo{%- else -%}{{ var|f }}{%- endif -%}"
+        )
+        assert t.render() == "foo"
+        with pytest.raises(TemplateRuntimeError, match="no filter named 'f'"):
+            t.render(var="bar")
+
+    def test_undefined_filter_nested_if(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+        t = env.from_string(
+            "{%- if var is not defined -%}foo{%- else -%}{%- if var2 "
+            "is defined -%}{{ var2|f }}{%- endif -%}bar{%- endif -%}"
+        )
+        assert t.render() == "foo"
+        assert t.render(var=42) == "bar"
+        with pytest.raises(TemplateRuntimeError, match="no filter named 'f'"):
+            t.render(var=42, var2=24)
+
+    def test_filter_test(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+
+        def f(var):
+            return f"var: {var}"
+
+        t = env.from_string(
+            "{%- if f is defined -%}{{ var|f }}{%- else -%}no filter{%- endif -%}"
+        )
+        assert t.render(var="foo") == "no filter"
+
+        env.filters["f"] = f
+        assert t.render(var="foo") == "var: foo"
+
+    def test_undefined_filter(self, env):
+        env = Environment(trim_blocks=True, lstrip_blocks=True)
+        with pytest.raises(TemplateAssertionError, match="no filter named 'f'"):
+            env.from_string("{{ var|f }}")

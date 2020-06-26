@@ -16,6 +16,8 @@ from .idtracking import VAR_LOAD_PARAMETER
 from .idtracking import VAR_LOAD_RESOLVE
 from .idtracking import VAR_LOAD_UNDEFINED
 from .nodes import EvalContext
+from .nodes import Filter
+from .nodes import If
 from .optimizer import Optimizer
 from .utils import concat
 from .visitor import NodeVisitor
@@ -130,6 +132,11 @@ class Frame:
         if parent is not None:
             self.buffer = parent.buffer
 
+        # we need to keep track of whether the current frame is a soft frame
+        # for an if-statement to determine if certain errors should be raised
+        # during runtime or compile time.
+        self.soft_frame = False
+
     def copy(self):
         """Create a copy of the current one."""
         rv = object.__new__(self.__class__)
@@ -152,6 +159,7 @@ class Frame:
         """
         rv = self.copy()
         rv.rootlevel = False
+        rv.soft_frame = True
         return rv
 
     __copy__ = copy
@@ -433,10 +441,28 @@ class CodeGenerator(NodeVisitor):
             visitor.visit(node)
         for dependency in "filters", "tests":
             mapping = getattr(self, dependency)
+            nested_if_filters = (
+                {
+                    filter_block.name
+                    for node in nodes
+                    if isinstance(node, If)
+                    for filter_block in node.find_all(Filter)
+                }
+                if dependency == "filters"
+                else set()
+            )
+
             for name in getattr(visitor, dependency):
                 if name not in mapping:
                     mapping[name] = self.temporary_identifier()
-                self.writeline(f"{mapping[name]} = environment.{dependency}[{name!r}]")
+                if name in nested_if_filters:
+                    self.writeline(
+                        f"{mapping[name]} = environment.{dependency}.get({name!r})"
+                    )
+                else:
+                    self.writeline(
+                        f"{mapping[name]} = environment.{dependency}[{name!r}]"
+                    )
 
     def enter_frame(self, frame):
         undefs = []
@@ -1129,6 +1155,22 @@ class CodeGenerator(NodeVisitor):
         self.visit(node.test, if_frame)
         self.write(":")
         self.indent()
+
+        # check during runtime that filters used inside of the executed
+        # block are defined, as this step was skipped during compile time
+        def check_filters(node):
+            for filter in node.find_all(nodes.Filter, exclude=nodes.If):
+                self.writeline(f"if {self.filters[filter.name]} is None:")
+                self.indent()
+                self.writeline(
+                    f"raise TemplateRuntimeError(\"no filter named '{filter.name}'\")"
+                )
+                self.outdent()
+
+        for body in node.body:
+            if not isinstance(body, If):
+                check_filters(body)
+
         self.blockvisit(node.body, if_frame)
         self.outdent()
         for elif_ in node.elif_:
@@ -1136,11 +1178,15 @@ class CodeGenerator(NodeVisitor):
             self.visit(elif_.test, if_frame)
             self.write(":")
             self.indent()
+            check_filters(elif_)
             self.blockvisit(elif_.body, if_frame)
             self.outdent()
         if node.else_:
             self.writeline("else:")
             self.indent()
+            for else_ in node.else_:
+                if not isinstance(else_, If):
+                    check_filters(else_)
             self.blockvisit(node.else_, if_frame)
             self.outdent()
 
@@ -1601,7 +1647,7 @@ class CodeGenerator(NodeVisitor):
             self.write("await auto_await(")
         self.write(self.filters[node.name] + "(")
         func = self.environment.filters.get(node.name)
-        if func is None:
+        if func is None and not frame.soft_frame:
             self.fail(f"no filter named {node.name!r}", node.lineno)
         if getattr(func, "contextfilter", False) is True:
             self.write("context, ")
